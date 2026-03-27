@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Two Canadas — A Census Story</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;0,900;1,700&family=IBM+Plex+Sans:wght@300;400;500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js"></script>
+<script src="https://unpkg.com/scrollama@3.2.0/build/scrollama.min.js"></script>
+<style>
+:root {
+  --ink: #eee8dc;
+  --paper: #141210;
+  --paper2: #1e1b17;
+  --rule: rgba(238,232,220,0.10);
+  --accent: #e05c4a;
+  --gold: #e8c57a;
+  --muted: #7a7268;
+  --mono: 'IBM Plex Mono', monospace;
+}
+*, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'IBM Plex Sans',sans-serif; background:var(--paper); color:var(--ink); overflow-x:hidden; }
+
+/* LOADING */
+#loading {
+  position:fixed; inset:0; background:var(--paper);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  z-index:9999; gap:20px;
+}
+.l-maple { font-size:48px; animation:pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.1);opacity:.7} }
+.l-title { font-family:'Playfair Display',serif; font-size:22px; color:var(--ink); letter-spacing:.06em; }
+.l-msg { font-family:var(--mono); font-size:11px; color:var(--muted); }
+.l-track { width:200px; height:2px; background:var(--rule); border-radius:1px; overflow:hidden; }
+.l-fill { height:100%; background:var(--accent); border-radius:1px; transition:width .4s ease; width:0%; }
+
+/* LAYOUT */
+#story { display:flex; align-items:flex-start; }
+#map-sticky {
+  position:sticky; top:0; width:58vw; height:100vh;
+  flex-shrink:0; background:var(--paper);
+  border-right:1px solid var(--rule); overflow:hidden;
+}
+#map-canvas { width:100%; height:100%; }
+#steps { width:42vw; padding:0 0 40vh 0; }
+
+.step { min-height:85vh; padding:40vh 48px 10vh 48px; display:flex; flex-direction:column; justify-content:center; }
+.step:first-child { padding-top:50vh; }
+
+.step-card {
+  background:var(--paper2); border-left:3px solid var(--rule);
+  padding:28px 28px 28px 32px; opacity:0.3; transform:translateX(12px);
+  transition:opacity .5s ease, transform .5s ease, border-color .3s ease;
+  max-width:420px; border-radius:0 4px 4px 0;
+}
+.step-card.is-active { opacity:1; transform:translateX(0); border-left-color:var(--accent); }
+.step-tag { font-family:var(--mono); font-size:9px; font-weight:500; letter-spacing:.18em; text-transform:uppercase; color:var(--accent); margin-bottom:10px; }
+.step-head { font-family:'Playfair Display',serif; font-size:26px; line-height:1.2; font-weight:900; margin-bottom:14px; color:var(--ink); }
+.step-head em { font-style:italic; color:var(--accent); }
+.step-body { font-size:13.5px; line-height:1.75; color:#b8b0a4; font-weight:300; }
+.step-body strong { font-weight:500; color:var(--ink); }
+.step-stat { margin-top:16px; padding:12px 14px; background:#0a0907; border-radius:4px; font-family:var(--mono); font-size:11px; color:var(--muted); line-height:1.7; }
+.step-stat b { color:var(--ink); font-weight:500; }
+
+/* RANK TABLE */
+.rank-table { width:100%; font-family:var(--mono); font-size:10px; border-collapse:collapse; margin-top:2px; }
+.rank-table thead tr { border-bottom:1px solid var(--rule); color:var(--muted); font-size:9px; letter-spacing:.08em; text-transform:uppercase; }
+.rank-table th { padding:4px 6px; text-align:left; font-weight:400; }
+.rank-table td { padding:6px 6px; border-bottom:1px solid rgba(238,232,220,0.05); vertical-align:middle; }
+.rank-city { color:var(--ink); font-weight:500; white-space:normal; word-break:break-word; }
+.rank-num { color:var(--muted); }
+.rank-delta-pos { color:#c084fc; font-weight:500; }
+.rank-delta-red { color:#e05c4a; font-weight:500; }
+.rank-bar-cell { width:50px; }
+.rank-bar-bg { background:rgba(255,255,255,.06); border-radius:2px; height:5px; width:100%; }
+.rank-bar-fill { height:5px; border-radius:2px; }
+.rank-note { font-family:var(--mono); font-size:9px; color:var(--muted); margin-top:6px; }
+
+/* MAP */
+.province { stroke:#1a1612; stroke-width:0.8; transition:fill .7s ease, opacity .3s; cursor:pointer; }
+.province:hover { opacity:.82; stroke:var(--gold); stroke-width:1.5; }
+.prov-label { font-family:var(--mono); font-size:9px; font-weight:500; fill:rgba(238,232,220,0.45); pointer-events:none; text-anchor:middle; dominant-baseline:middle; }
+
+/* TOOLTIP */
+#tip {
+  position:fixed; pointer-events:none; background:#0a0907; color:var(--ink);
+  border:1px solid var(--rule); padding:10px 14px; border-radius:3px;
+  font-size:11.5px; max-width:230px; opacity:0; transition:opacity .15s; z-index:500;
+}
+#tip.show { opacity:1; }
+.tip-name { font-family:'Playfair Display',serif; font-size:13px; font-weight:700; margin-bottom:6px; color:var(--gold); }
+.tip-row { display:flex; justify-content:space-between; gap:14px; margin-bottom:2px; font-size:11px; }
+.tip-k { color:var(--muted); font-family:var(--mono); }
+.tip-v { font-weight:500; }
+
+/* MAP OVERLAY */
+#map-overlay { position:absolute; bottom:0; left:0; width:100%; pointer-events:none; padding:16px 20px; }
+#map-title { font-family:'Playfair Display',serif; font-size:12px; font-weight:700; color:var(--ink); opacity:.6; margin-bottom:6px; font-style:italic; }
+#map-legend { display:flex; align-items:center; gap:10px; }
+.leg-lo, .leg-hi { font-family:var(--mono); font-size:9px; color:var(--muted); }
+.leg-bar { height:6px; width:90px; border-radius:3px; }
+
+/* HOOK */
+#hook-overlay {
+  position:absolute; inset:0; background:var(--paper);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  opacity:1; transition:opacity 1s ease; pointer-events:none;
+}
+#hook-overlay.hidden { opacity:0; }
+.hook-maple { font-size:52px; margin-bottom:16px; }
+.hook-headline { font-family:'Playfair Display',serif; font-size:clamp(22px,2.5vw,34px); font-weight:900; color:var(--ink); text-align:center; line-height:1.2; max-width:400px; margin-bottom:12px; }
+.hook-headline em { color:var(--gold); font-style:italic; }
+.hook-sub { font-family:var(--mono); font-size:11px; color:var(--muted); letter-spacing:.1em; text-align:center; }
+.hook-scroll { position:absolute; bottom:24px; font-family:var(--mono); font-size:9px; color:var(--muted); letter-spacing:.15em; animation:bob 2s ease-in-out infinite; }
+@keyframes bob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(5px)} }
+
+/* TWO CANADAS */
+.two-canada-split { display:flex; gap:0; margin-top:16px; }
+.tc-col { flex:1; padding:12px 14px; font-family:var(--mono); font-size:10px; line-height:1.9; }
+.tc-col.urban { background:#1a3a52; color:#a8d4f0; }
+.tc-col.periph { background:#4a1a14; color:#f0a8a0; }
+.tc-label { font-size:8px; letter-spacing:.15em; text-transform:uppercase; opacity:.6; margin-bottom:4px; }
+.tc-name { font-family:'Playfair Display',serif; font-size:14px; font-weight:700; margin-bottom:8px; color:white; }
+
+/* EXPLORE */
+#explore-panel { display:none; position:absolute; inset:0; background:var(--paper); flex-direction:column; overflow:hidden; }
+#explore-panel.show { display:flex; }
+.exp-head { padding:14px 18px; border-bottom:1px solid var(--rule); display:flex; align-items:center; justify-content:space-between; flex-shrink:0; }
+.exp-title { font-family:'Playfair Display',serif; font-size:15px; font-weight:700; }
+.exp-controls { padding:8px 18px; border-bottom:1px solid var(--rule); display:flex; gap:6px; flex-wrap:wrap; align-items:center; flex-shrink:0; }
+.exp-label { font-family:var(--mono); font-size:9px; color:var(--muted); letter-spacing:.1em; text-transform:uppercase; }
+.ctrl-btn { font-family:var(--mono); font-size:10px; padding:4px 11px; border:1px solid var(--rule); background:transparent; color:var(--muted); border-radius:2px; cursor:pointer; transition:all .2s; }
+.ctrl-btn:hover { color:var(--ink); border-color:var(--ink); }
+.ctrl-btn.active { background:var(--accent); color:white; border-color:var(--accent); }
+.exp-map { flex:1; overflow:hidden; }
+#exp-map-wrap { flex:1; position:relative; overflow:hidden; cursor:pointer; }
+#exp-svg { width:100%; height:100%; }
+.exp-legend { padding:8px 18px; border-top:1px solid var(--rule); flex-shrink:0; display:flex; align-items:center; gap:10px; }
+
+.src-line { position:absolute; bottom:6px; right:10px; font-family:var(--mono); font-size:8px; color:var(--muted); text-align:right; line-height:1.6; pointer-events:none; }
+
+/* ── COMPARE SIDEBAR ── */
+#exp-body { display:flex; flex:1; overflow:hidden; }
+#exp-map-wrap { flex:1; position:relative; overflow:hidden; cursor:pointer; }
+#cmp-sidebar {
+  width:0; flex-shrink:0; overflow:hidden;
+  border-left:1px solid var(--rule);
+  transition:width .35s ease;
+  display:flex; flex-direction:column;
+  background:var(--paper2);
+}
+#cmp-sidebar.open { width:260px; }
+.cmp-sb-head {
+  padding:12px 14px 8px; border-bottom:1px solid var(--rule); flex-shrink:0;
+  display:flex; align-items:center; justify-content:space-between;
+}
+.cmp-sb-title { font-family:'Playfair Display',serif; font-size:12px; font-weight:700; color:var(--ink); }
+.cmp-sb-hint { font-family:var(--mono); font-size:9px; color:var(--muted); padding:8px 14px 4px; flex-shrink:0; }
+.cmp-sb-body { flex:1; overflow-y:auto; padding:8px 14px 14px; }
+.cmp-prov-pills { display:flex; gap:6px; padding:6px 14px; flex-shrink:0; flex-wrap:wrap; }
+.cmp-pill {
+  font-family:var(--mono); font-size:10px; padding:3px 10px;
+  border-radius:2px; border:1px solid var(--rule); color:var(--muted);
+  cursor:pointer; transition:all .2s;
+}
+.cmp-pill.a { background:#1a3a52; color:#a8d4f0; border-color:#1a3a52; }
+.cmp-pill.b { background:#4a1a14; color:#f0a8a0; border-color:#4a1a14; }
+.cmp-metric-block { margin-bottom:14px; }
+.cmp-metric-label { font-family:var(--mono); font-size:8px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); margin-bottom:6px; }
+.cmp-bar-row { margin-bottom:4px; }
+.cmp-bar-name { font-family:var(--mono); font-size:9px; color:var(--muted); margin-bottom:2px; }
+.cmp-bar-track { height:8px; background:rgba(255,255,255,.05); border-radius:2px; width:100%; position:relative; margin-bottom:1px; }
+.cmp-bar-fill { height:8px; border-radius:2px; transition:width .5s ease; position:absolute; left:0; top:0; }
+.cmp-bar-val { font-family:var(--mono); font-size:9px; color:var(--muted); text-align:right; }
+.cmp-divider { border:none; border-top:1px solid var(--rule); margin:10px 0; }
+
+::-webkit-scrollbar { width:3px; }
+::-webkit-scrollbar-thumb { background:var(--rule); border-radius:2px; }
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="l-maple">🍁</div>
+  <div class="l-title">Two Canadas</div>
+  <div class="l-msg" id="l-msg">Loading census data…</div>
+  <div class="l-track"><div class="l-fill" id="l-fill"></div></div>
+</div>
+
+<div id="tip"></div>
+
+<div id="story">
+  <div id="map-sticky">
+    <svg id="map-canvas"></svg>
+    <div id="hook-overlay">
+      <div class="hook-maple">🍁</div>
+      <div class="hook-headline">Two <em>Canadas</em></div>
+      <div class="hook-sub">A CENSUS STORY · 2016 — 2021</div>
+      <div class="hook-scroll">↓ SCROLL TO EXPLORE</div>
+    </div>
+    <div id="map-overlay">
+      <div id="map-title"></div>
+      <div id="map-legend"></div>
+    </div>
+    <div id="explore-panel">
+      <div class="exp-head">
+        <span class="exp-title">Explore the Data</span>
+        <button class="ctrl-btn" id="exp-close">← Back to Story</button>
+      </div>
+      <div class="exp-controls">
+        <span class="exp-label">Metric</span>
+        <button class="ctrl-btn active" data-exp="pop">Population</button>
+        <button class="ctrl-btn" data-exp="growth">Growth Rate</button>
+        <button class="ctrl-btn" data-exp="income">Income</button>
+        <button class="ctrl-btn" data-exp="hdgree">Education Δ</button>
+        <button class="ctrl-btn" data-exp="immig">Immigration Δ</button>
+        <button class="ctrl-btn" data-exp="age">Age Δ</button>
+        <button class="ctrl-btn" id="cmp-toggle-btn" style="margin-left:8px">⇄ Compare</button>
+      </div>
+      <div id="exp-body">
+      <div id="exp-map-wrap"><svg id="exp-svg"></svg></div>
+      <div id="cmp-sidebar">
+        <div class="cmp-sb-head">
+          <span class="cmp-sb-title">Compare</span>
+          <button class="ctrl-btn" id="cmp-clear" style="font-size:9px;padding:2px 8px">Clear</button>
+        </div>
+        <div class="cmp-prov-pills" id="cmp-pills">
+          <span class="cmp-pill" id="pill-a">Province A</span>
+          <span class="cmp-pill" id="pill-b">Province B</span>
+        </div>
+        <div class="cmp-sb-hint">Click map to select · up to 2 provinces</div>
+        <div class="cmp-sb-body" id="cmp-sb-body">
+          <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:20px;line-height:1.8;text-align:center">
+            Click any two provinces<br>on the map to compare
+          </div>
+        </div>
+      </div>
+    </div>
+      <div class="exp-legend" id="exp-legend"></div>
+    </div>
+    <div class="src-line">Statistics Canada · 2016 & 2021 Census PUMF<br>Catalogue 98M0001X · Province-level microdata<br>Inspired by KDE Explainer (mathisonian.github.io)</div>
+  </div>
+
+  <div id="steps">
+    <div class="step" data-step="1">
+      <div class="step-card">
+        <div class="step-tag">01 — Introduction</div>
+        <div class="step-head">Canada on the Map, <em>Seemingly Unified</em></div>
+        <div class="step-body">
+          From coast to coast, under the same national flag, two distinct population realities are emerging: one growing rapidly, youthful, and diverse; the other aging rapidly and gradually being marginalized.
+          <div class="step-stat">
+            <b>5.2%</b> — Canada's population growth 2016–2021<br>
+            <b>#1</b> among all G7 nations<br>
+            <b>80%</b> of that growth driven by immigration <sup>[1]</sup>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step" data-step="2">
+      <div class="step-card">
+        <div class="step-tag">02 — Population Baseline</div>
+        <div class="step-head">Population Distribution <em>in 2016</em></div>
+        <div class="step-body">
+          Canada has an uneven population distribution. Ontario has over <strong>13 million</strong> people, accounting for more than one-third of the country's total; while Prince Edward Island has less than 150,000 people. <sup>[1]</sup>
+          <div class="step-stat">
+            Colour intensity = <b>provincial population (2016)</b><br>
+            Darker = more people · hover for details
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step" data-step="3">
+      <div class="step-card">
+        <div class="step-tag">03 — Population Growth</div>
+        <div class="step-head"><em>Uneven</em> Growth</div>
+        <div class="step-body">
+          The gap has widened over the past five years. Some provinces have experienced rapid growth, while others have almost stagnated. Atlantic Canada has seen slow growth, while Ontario, B.C., and Alberta have been significantly ahead.
+          <div class="step-stat">
+            Colour = <b>population growth rate 2016→2021</b><br>
+            Darker green = faster growth
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step" data-step="4">
+      <div class="step-card">
+        <div class="step-tag">04 — Economic Opportunity</div>
+        <div class="step-head">Income and Opportunity <em>Concentration</em></div>
+        <div class="step-body">
+          The after-tax income indicates where the opportunities lie. The provinces with the fastest growth are also the regions with the highest income, continuously attracting population and immigration inflows.
+          <div class="step-stat">
+            Colour = <b>median after-tax income · 2021</b><br>
+            Darker = higher income · hover for exact figures
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step" data-step="5">
+      <div class="step-card">
+        <div class="step-tag">05 — Education</div>
+        <div class="step-head">High Education Is Also <em>Concentrating</em></div>
+        <div class="step-body">
+          Not only are immigrants concentrating, but the population with a university degree is also gathering in the same set of provinces. These regions are simultaneously driving population and economic growth.
+        </div>
+        <div id="hdgree-table" style="margin-top:14px"></div>
+      </div>
+    </div>
+
+    <div class="step" data-step="6">
+      <div class="step-card">
+        <div class="step-tag">06 — Immigration</div>
+        <div class="step-head">Uneven Distribution <em>of Immigrants</em></div>
+        <div class="step-body">
+          From 2016 to 2021, the proportion of immigrants rose, but the differences were significant. Some provinces absorbed more new immigrants, and the gap in population structure further widened.
+        </div>
+        <div id="immig-table" style="margin-top:14px"></div>
+      </div>
+    </div>
+
+    <div class="step" data-step="7">
+      <div class="step-card">
+        <div class="step-tag">07 — Aging Population</div>
+        <div class="step-head">Places Without Immigration <em>Are Aging</em></div>
+        <div class="step-body">
+          Immigration brings in younger populations. However, in provinces with fewer immigrants, the median age continues to rise, leading to an acceleration of aging.
+        </div>
+        <div id="age-table" style="margin-top:14px"></div>
+      </div>
+    </div>
+
+    <div class="step" data-step="8">
+      <div class="step-card">
+        <div class="step-tag">08 — Conclusion</div>
+        <div class="step-head">Two <em>Canadas</em></div>
+        <div class="step-body">
+          The data shows that Canada is diversifying: not only regional differences, but also depending on whether it integrates into the growth system driven by immigration.
+        </div>
+        <div class="two-canada-split">
+          <div class="tc-col urban">
+            <div class="tc-label">Urban Core</div>
+            <div class="tc-name">Growing Canada</div>
+            Ontario · British Columbia<br>Alberta · Quebec<br><br>
+            Young · Diverse<br>High Income · Rapid Growth
+          </div>
+          <div class="tc-col periph">
+            <div class="tc-label">Peripheral</div>
+            <div class="tc-name">Aging Canada</div>
+            Atlantic Provinces<br>Saskatchewan · Manitoba<br><br>
+            Aging · Slow Growth<br>Fewer Immigrants
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step" data-step="9">
+      <div class="step-card">
+        <div class="step-tag">09 — Explore</div>
+        <div class="step-head">Start <em>Exploring</em></div>
+        <div class="step-body">
+          Using the interactive panel, compare different provinces and indicators to uncover more changes behind the data.
+        </div>
+        <div style="margin-top:16px">
+          <button id="open-explore" style="font-family:var(--mono);font-size:11px;padding:9px 20px;background:var(--accent);color:white;border:none;border-radius:2px;cursor:pointer;letter-spacing:.06em;">
+            Open Explorer →
+          </button>
+        </div>
+        <div class="step-stat" style="margin-top:12px">
+          <b>References</b><br>
+          [1] Canada tops G7 growth despite COVID. (2022, Feb 9). Government of Canada.<br>
+          <a href="https://www150.statcan.gc.ca/n1/daily-quotidien/220209/dq220209a-eng.htm" target="_blank" style="color:var(--accent);font-size:9px;word-break:break-all">statcan.gc.ca/n1/daily-quotidien/220209/dq220209a-eng.htm</a><br><br>
+          Data: Statistics Canada, 2016 &amp; 2021 Census PUMF<br>
+          Inspired by KDE Explainer · mathisonian.github.io
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Province config ──
+const PR_INFO = {
+  10:{name:"Newfoundland & Labrador", abbr:"NL"},
+  11:{name:"Prince Edward Island",    abbr:"PE"},
+  12:{name:"Nova Scotia",             abbr:"NS"},
+  13:{name:"New Brunswick",           abbr:"NB"},
+  24:{name:"Québec",                  abbr:"QC"},
+  35:{name:"Ontario",                 abbr:"ON"},
+  46:{name:"Manitoba",                abbr:"MB"},
+  47:{name:"Saskatchewan",            abbr:"SK"},
+  48:{name:"Alberta",                 abbr:"AB"},
+  59:{name:"British Columbia",        abbr:"BC"},
+};
+
+// abbr → PR code lookup
+const ABBR_TO_PR = {};
+Object.entries(PR_INFO).forEach(([k,v]) => ABBR_TO_PR[v.abbr] = +k);
+
+const AGEGRP_MID = {1:2,2:5.5,3:8,4:10.5,5:13,6:16,7:18.5,8:22,9:27,10:32,11:37,12:42,13:47,14:52,15:57,16:62,17:67,18:72,19:77,20:82,21:88};
+const NON_IMMIG = new Set([1, 2]); // non-immigrant + pre-1980
+
+function setProgress(pct, msg) {
+  document.getElementById("l-fill").style.width = pct + "%";
+  if (msg) document.getElementById("l-msg").textContent = msg;
+}
+
+// ── Aggregate CSV rows → province stats ──
+function aggregatePR(rows) {
+  const acc = {};
+  Object.keys(PR_INFO).forEach(pr => {
+    acc[pr] = {pop:0, incomes:[], immig:0, immig_tot:0, age_num:0, age_den:0, bach:0, bach_tot:0};
+  });
+  rows.forEach(r => {
+    const pr = +(r.pr || r.PR);
+    if (!acc[pr]) return;
+    const w = +(r.weight || r.WEIGHT) || 1;
+    const a = acc[pr];
+    a.pop += w;
+    const inc = +(r.totinc_at || r.TotInc_AT || 0);
+    if (inc > 0 && inc < 88000000) a.incomes.push({v:inc, w});
+    const imm = +(r.immcat5 || r.IMMCAT5 || 0);
+    if (imm > 0 && imm !== 88) {
+      a.immig_tot += w;
+      if (!NON_IMMIG.has(imm)) a.immig += w;
+    }
+    const ag = +(r.agegrp || r.AGEGRP || 88);
+    if (ag !== 88 && AGEGRP_MID[ag]) { a.age_num += AGEGRP_MID[ag]*w; a.age_den += w; }
+    const hd = +(r.hdgree || r.HDGREE || 0);
+    if (hd > 0 && hd !== 88 && hd !== 99) {
+      a.bach_tot += w;
+      if (hd >= 9) a.bach += w;
+    }
+  });
+  const result = {};
+  Object.entries(acc).forEach(([pr, a]) => {
+    if (a.pop === 0) return;
+    let medInc = 0;
+    if (a.incomes.length > 0) {
+      a.incomes.sort((x,y) => x.v - y.v);
+      const half = a.incomes.reduce((s,x) => s+x.w, 0) / 2;
+      let cum = 0;
+      for (const {v,w} of a.incomes) { cum += w; if (cum >= half) { medInc = v; break; } }
+    }
+    result[pr] = {
+      pr: +pr, pop: Math.round(a.pop),
+      income_med: Math.round(medInc),
+      immig_pct:  a.immig_tot > 0 ? +(a.immig/a.immig_tot*100).toFixed(2) : 0,
+      median_age: a.age_den  > 0 ? +(a.age_num/a.age_den).toFixed(2) : 0,
+      bach_pct:   a.bach_tot > 0 ? +(a.bach/a.bach_tot*100).toFixed(2) : 0,
+    };
+  });
+  return result;
+}
+
+// ── State ──
+let DATA16 = {}, DATA21 = {};
+let topoData = null, currentFrame = 1, expMetric = "pop";
+let svg, g, proj, path, W, H;
+
+// ── Map init ──
+function initMap() {
+  const wrap = document.getElementById("map-sticky");
+  W = wrap.clientWidth; H = wrap.clientHeight;
+  svg = d3.select("#map-canvas").attr("width",W).attr("height",H);
+  const zoomBeh = d3.zoom().scaleExtent([0.6,8]).on("zoom", e => g.attr("transform", e.transform));
+  svg.call(zoomBeh);
+  g = svg.append("g");
+  const features = topojson.feature(topoData, topoData.objects.default);
+  proj = d3.geoConicConformal().parallels([49,77]).rotate([96,0]).fitSize([W,H], features);
+  path = d3.geoPath().projection(proj);
+
+  g.selectAll(".province")
+    .data(features.features).join("path")
+    .attr("class","province").attr("d",path).attr("fill","#2a2620")
+    .on("mouseover", (e,d) => onHover(e,d))
+    .on("mousemove", moveT).on("mouseout", hideT);
+
+  g.selectAll(".prov-label")
+    .data(features.features).join("text")
+    .attr("class","prov-label")
+    .attr("x", d => path.centroid(d)[0])
+    .attr("y", d => path.centroid(d)[1])
+    .text(d => d.properties["postal-code"] || "");
+}
+
+// ── Colour helpers ──
+function getValFn(frame) {
+  if (frame === 2) return pr => DATA16[pr]?.pop || null;
+  if (frame === 3) return pr => {
+    const d16=DATA16[pr],d21=DATA21[pr];
+    if(!d16||!d21||d16.pop===0) return null;
+    return (d21.pop-d16.pop)/d16.pop*100;
+  };
+  if (frame === 4) return pr => DATA21[pr]?.income_med || null;
+  if (frame === 5) return pr => {
+    const d16=DATA16[pr],d21=DATA21[pr];
+    if(!d16||!d21) return null;
+    return d21.bach_pct - d16.bach_pct;
+  };
+  if (frame === 6) return pr => {
+    const d16=DATA16[pr],d21=DATA21[pr];
+    if(!d16||!d21) return null;
+    return d21.immig_pct - d16.immig_pct;
+  };
+  if (frame === 7) return pr => {
+    const d16=DATA16[pr],d21=DATA21[pr];
+    if(!d16||!d21) return null;
+    return d21.median_age - d16.median_age;
+  };
+  return null;
+}
+
+const FRAME_CONFIG = {
+  2: {interp:d3.interpolateBlues,                            lo:"Fewer people",      hi:"More people",       title:"Population · 2016",                        diverge:false},
+  3: {interp:t=>d3.interpolateRgb("#1a1a2e","#2ecc71")(t),  lo:"Slower growth",     hi:"Faster growth",     title:"Population Growth Rate · 2016 → 2021 (%)",  diverge:false},
+  4: {interp:d3.interpolateYlOrBr,                          lo:"Lower income",      hi:"Higher income",     title:"Median After-Tax Income · 2021",            diverge:false},
+  5: {interp:t=>d3.interpolateRgb("#1a0a14","#f472b6")(t), lo:"Fewer graduates",   hi:"More graduates",    title:"Bachelor's Degree Share Change · 2016 → 2021 (pp)", diverge:false},
+  6: {interp:d3.interpolatePurples,                         lo:"Little change",     hi:"Large increase",    title:"Immigrant Share Change · 2016 → 2021 (pp)", diverge:false},
+  7: {interp:d3.interpolateOrRd,                            lo:"Getting younger",   hi:"Getting older",     title:"Median Age Change · 2016 → 2021 (years)",   diverge:false},
+};
+
+function colorMap(frame) {
+  document.getElementById("map-title").textContent = "";
+  document.getElementById("map-legend").innerHTML = "";
+
+  if (frame === 1 || frame === 9) {
+    g.selectAll(".province").transition().duration(600).attr("fill","#2a2620");
+    return;
+  }
+  if (frame === 8) {
+    const GROWING = new Set(["ON","BC","AB","QC"]);
+    g.selectAll(".province").transition().duration(700)
+      .attr("fill", d => {
+        const abbr = d.properties["postal-code"];
+        if (["NT","YT","NU"].includes(abbr)) return "#2a2620";
+        return GROWING.has(abbr) ? "#1a3a52" : "#4a1a14";
+      });
+    document.getElementById("map-title").textContent = "Two Canadas · Growing (blue) vs Aging (red)";
+    document.getElementById("map-legend").innerHTML = `
+      <div style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:9px;color:var(--muted)">
+        <div style="width:10px;height:10px;border-radius:2px;background:#1a3a52;flex-shrink:0"></div>Growing Canada
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:9px;color:var(--muted)">
+        <div style="width:10px;height:10px;border-radius:2px;background:#4a1a14;flex-shrink:0"></div>Aging Canada
+      </div>`;
+    return;
+  }
+
+  const cfg   = FRAME_CONFIG[frame];
+  const valFn = getValFn(frame);
+  const prNums = Object.keys(PR_INFO).map(Number);
+  const vals  = prNums.map(pr => valFn(pr)).filter(v => v !== null && isFinite(v));
+  if (!vals.length) return;
+
+  let domain;
+  if (cfg.diverge) {
+    const maxAbs = Math.max(Math.abs(d3.min(vals)), Math.abs(d3.max(vals)));
+    domain = [-maxAbs, maxAbs];
+  } else {
+    domain = d3.extent(vals);
+  }
+  const cScale = d3.scaleSequential(cfg.interp).domain(domain);
+
+  g.selectAll(".province").transition().duration(700)
+    .attr("fill", d => {
+      const abbr = d.properties["postal-code"];
+      if (["NT","YT","NU"].includes(abbr)) return "#2a2620";
+      const pr   = ABBR_TO_PR[abbr];
+      if (!pr) return "#2a2620";
+      const v = valFn(pr);
+      return (v !== null && isFinite(v)) ? cScale(v) : "#2a2620";
+    });
+
+  document.getElementById("map-title").textContent = cfg.title;
+  const stops = d3.range(0,1.01,.2).map(t => cfg.interp(t)).join(",");
+  document.getElementById("map-legend").innerHTML = `
+    <span class="leg-lo">${cfg.lo}</span>
+    <div class="leg-bar" style="background:linear-gradient(to right,${stops})"></div>
+    <span class="leg-hi">${cfg.hi}</span>`;
+}
+
+// ── Tooltip ──
+function onHover(e, d) {
+  const abbr = d.properties["postal-code"];
+  const pr   = ABBR_TO_PR[abbr];
+  const info = PR_INFO[pr];
+  if (!info) return;
+  const d16 = DATA16[pr], d21 = DATA21[pr];
+  if (!d16 || !d21) return;
+  const rows = [];
+  const gr = d16.pop > 0 ? ((d21.pop-d16.pop)/d16.pop*100).toFixed(1) : "—";
+  const sign = v => v >= 0 ? "+" : "";
+
+  if (currentFrame === 2) {
+    rows.push({k:"Population (2016)", v: fmtPop(d16.pop)});
+    rows.push({k:"Population (2021)", v: fmtPop(d21.pop)});
+  } else if (currentFrame === 3) {
+    rows.push({k:"Growth 2016→2021",  v: sign(+gr) + gr + "%"});
+    rows.push({k:"2016",              v: fmtPop(d16.pop)});
+    rows.push({k:"2021",              v: fmtPop(d21.pop)});
+  } else if (currentFrame === 4) {
+    rows.push({k:"Median income (AT) 2021", v: "$" + Math.round(d21.income_med/1000) + "k"});
+    rows.push({k:"Median income (AT) 2016", v: "$" + Math.round(d16.income_med/1000) + "k"});
+  } else if (currentFrame === 5) {
+    const delta = d21.bach_pct - d16.bach_pct;
+    rows.push({k:"Bachelor's+ change", v: sign(delta) + delta.toFixed(1) + " pp"});
+    rows.push({k:"2016", v: d16.bach_pct.toFixed(1) + "%"});
+    rows.push({k:"2021", v: d21.bach_pct.toFixed(1) + "%"});
+  } else if (currentFrame === 6) {
+    const delta = d21.immig_pct - d16.immig_pct;
+    rows.push({k:"Immig. share change", v: sign(delta) + delta.toFixed(1) + " pp"});
+    rows.push({k:"2016", v: d16.immig_pct.toFixed(1) + "%"});
+    rows.push({k:"2021", v: d21.immig_pct.toFixed(1) + "%"});
+  } else if (currentFrame === 7) {
+    const delta = d21.median_age - d16.median_age;
+    rows.push({k:"Median age change", v: sign(delta) + delta.toFixed(1) + " yr"});
+    rows.push({k:"2016", v: d16.median_age.toFixed(1) + " yr"});
+    rows.push({k:"2021", v: d21.median_age.toFixed(1) + " yr"});
+  } else {
+    // Explore / Two Canadas: show all
+    rows.push({k:"Population (2021)",    v: fmtPop(d21.pop)});
+    rows.push({k:"Growth 2016→21",       v: sign(+gr) + gr + "%"});
+    rows.push({k:"Median income 2021",   v: "$" + Math.round(d21.income_med/1000) + "k"});
+    rows.push({k:"Bachelor's+ 2021",     v: d21.bach_pct.toFixed(1) + "%"});
+    rows.push({k:"Immig. share Δ",       v: sign(d21.immig_pct-d16.immig_pct) + (d21.immig_pct-d16.immig_pct).toFixed(1) + " pp"});
+    rows.push({k:"Median age Δ",         v: sign(d21.median_age-d16.median_age) + (d21.median_age-d16.median_age).toFixed(1) + " yr"});
+  }
+  showTip(e, rows, info.name);
+}
+function showTip(e, rows, name) {
+  const tip = document.getElementById("tip");
+  tip.innerHTML = `<div class="tip-name">${name}</div>` +
+    rows.map(r => `<div class="tip-row"><span class="tip-k">${r.k}</span><span class="tip-v">${r.v}</span></div>`).join("");
+  tip.classList.add("show"); moveT(e);
+}
+function moveT(e) {
+  const t = document.getElementById("tip");
+  t.style.left = Math.min(e.clientX+14, window.innerWidth-240)+"px";
+  t.style.top  = Math.max(e.clientY-10, 8)+"px";
+}
+function hideT() { document.getElementById("tip").classList.remove("show"); }
+function fmtPop(v) {
+  if (v>=1e6) return (v/1e6).toFixed(2)+"M";
+  if (v>=1000) return (v/1000).toFixed(0)+"k";
+  return v.toLocaleString();
+}
+
+// ── Rank tables ──
+function buildRankTables() {
+  const immigRows = Object.keys(PR_INFO).map(pr => {
+    const d16=DATA16[pr], d21=DATA21[pr];
+    if (!d16||!d21) return null;
+    return {name:PR_INFO[pr].name, v16:d16.immig_pct, v21:d21.immig_pct, delta:+(d21.immig_pct-d16.immig_pct).toFixed(2)};
+  }).filter(Boolean).sort((a,b)=>b.delta-a.delta);
+
+  const ageRows = Object.keys(PR_INFO).map(pr => {
+    const d16=DATA16[pr], d21=DATA21[pr];
+    if (!d16||!d21) return null;
+    return {name:PR_INFO[pr].name, v16:d16.median_age, v21:d21.median_age, delta:+(d21.median_age-d16.median_age).toFixed(2)};
+  }).filter(Boolean).sort((a,b)=>b.delta-a.delta);
+
+  // HDGREE delta table
+  const hdgreeRows = Object.keys(PR_INFO).map(pr => {
+    const d16=DATA16[pr], d21=DATA21[pr];
+    if (!d16||!d21) return null;
+    return {name:PR_INFO[pr].name, v16:d16.bach_pct, v21:d21.bach_pct, delta:+(d21.bach_pct-d16.bach_pct).toFixed(2)};
+  }).filter(Boolean).sort((a,b)=>b.delta-a.delta);
+  const hdgreeEl = document.getElementById("hdgree-table");
+  if (hdgreeEl) hdgreeEl.innerHTML = makeTable(
+    hdgreeRows.slice(0,5),
+    r => (r.delta>=0?"+":"")+r.delta.toFixed(1)+" pp",
+    r => r.v16.toFixed(1)+"% → "+r.v21.toFixed(1)+"%",
+    "#f472b6", "rank-delta-pos",
+    "Top 5 provinces · bachelor's+ share increase 2016→2021",
+    Math.max(...hdgreeRows.slice(0,5).map(r=>Math.abs(r.delta)),0.01)
+  );
+
+  document.getElementById("immig-table").innerHTML = makeTable(
+    immigRows.slice(0,5),
+    r => (r.delta>=0?"+":"")+r.delta.toFixed(1)+" pp",
+    r => r.v16.toFixed(1)+"% → "+r.v21.toFixed(1)+"%",
+    "#c084fc", "rank-delta-pos",
+    "Top 5 provinces · immigrant share increase 2016→2021",
+    Math.max(...immigRows.slice(0,5).map(r=>Math.abs(r.delta)),0.01)
+  );
+
+  document.getElementById("age-table").innerHTML = makeTable(
+    ageRows.slice(0,5),
+    r => (r.delta>=0?"+":"")+r.delta.toFixed(2)+" yr",
+    r => r.v16.toFixed(1)+" → "+r.v21.toFixed(1)+" yr",
+    "#e05c4a", "rank-delta-red",
+    "Top 5 provinces · median age increase 2016→2021",
+    Math.max(...ageRows.slice(0,5).map(r=>Math.abs(r.delta)),0.01)
+  );
+}
+
+function makeTable(rows, deltaFmt, rangeFmt, barColor, deltaClass, note, maxDelta) {
+  return `<table class="rank-table">
+    <thead><tr><th>Province</th><th>Change</th><th>2016 → 2021</th><th></th></tr></thead>
+    <tbody>${rows.map(r=>`<tr>
+      <td class="rank-city">${r.name}</td>
+      <td class="${deltaClass}">${deltaFmt(r)}</td>
+      <td class="rank-num">${rangeFmt(r)}</td>
+      <td class="rank-bar-cell"><div class="rank-bar-bg"><div class="rank-bar-fill" style="width:${(Math.abs(r.delta)/maxDelta*100).toFixed(0)}%;background:${barColor}"></div></div></td>
+    </tr>`).join("")}</tbody>
+  </table><div class="rank-note">${note}</div>`;
+}
+
+// ── Explore panel ──
+document.getElementById("open-explore").addEventListener("click", () => {
+  document.getElementById("explore-panel").classList.add("show");
+  drawExplore();
+});
+document.getElementById("exp-close").addEventListener("click", () => {
+  document.getElementById("explore-panel").classList.remove("show");
+});
+document.querySelectorAll("[data-exp]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("[data-exp]").forEach(b=>b.classList.remove("active"));
+    btn.classList.add("active"); expMetric = btn.dataset.exp; drawExplore();
+  });
+});
+
+function drawExplore() {
+  const wrap = document.getElementById("exp-map-wrap");
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  const expSvg = d3.select("#exp-svg").attr("width",w).attr("height",h);
+  expSvg.selectAll("*").remove();
+  const gE = expSvg.append("g");
+  const features = topojson.feature(topoData, topoData.objects.default);
+  const eProj = d3.geoConicConformal().parallels([49,77]).rotate([96,0]).fitSize([w,h],features);
+  const ePath = d3.geoPath().projection(eProj);
+  const expZoom = d3.zoom().scaleExtent([0.5,8]).on("zoom",e=>gE.attr("transform",e.transform));
+  expSvg.call(expZoom);
+  // Allow single clicks to reach province elements (zoom only triggers on drag)
+  expSvg.on("click.zoom", null);
+
+  const frameMap = {pop:2, growth:3, income:4, hdgree:5, immig:6, age:7};
+  const frame = frameMap[expMetric] || 2;
+  const cfg = FRAME_CONFIG[frame];
+  const valFn = getValFn(frame);
+  const prNums = Object.keys(PR_INFO).map(Number);
+  const vals = prNums.map(pr=>valFn(pr)).filter(v=>v!==null&&isFinite(v));
+  let domain;
+  if (cfg.diverge) { const m=Math.max(Math.abs(d3.min(vals)),Math.abs(d3.max(vals))); domain=[-m,m]; }
+  else domain = d3.extent(vals);
+  const cScale = d3.scaleSequential(cfg.interp).domain(domain);
+
+  gE.selectAll("path").data(features.features).join("path")
+    .attr("d",ePath).attr("stroke","#1a1612").attr("stroke-width",.8)
+    .attr("fill", d => {
+      const abbr=d.properties["postal-code"];
+      if(["NT","YT","NU"].includes(abbr)) return "#2a2620";
+      const pr=ABBR_TO_PR[abbr];
+      if(!pr) return "#1e1b17";
+      const v=valFn(pr);
+      return (v!==null&&isFinite(v))?cScale(v):"#1e1b17";
+    })
+    .on("mouseover",(e,d)=>onHover(e,d)).on("mousemove",moveT).on("mouseout",hideT)
+    .on("click",(e,d)=>{ e.stopPropagation(); handleCmpClick(d.properties["postal-code"]); });
+
+  gE.selectAll("text").data(features.features).join("text")
+    .attr("x",d=>ePath.centroid(d)[0]).attr("y",d=>ePath.centroid(d)[1])
+    .attr("text-anchor","middle").attr("dominant-baseline","middle")
+    .attr("font-family","var(--mono)").attr("font-size","9px")
+    .attr("fill","rgba(238,232,220,0.45)").attr("pointer-events","none")
+    .text(d=>d.properties["postal-code"]||"");
+
+  const stops = d3.range(0,1.01,.2).map(t=>cfg.interp(t)).join(",");
+  document.getElementById("exp-legend").innerHTML = `
+    <span style="font-family:var(--mono);font-size:9px;color:var(--muted)">${cfg.lo}</span>
+    <div style="background:linear-gradient(to right,${stops});height:6px;width:90px;border-radius:3px"></div>
+    <span style="font-family:var(--mono);font-size:9px;color:var(--muted)">${cfg.hi}</span>`;
+}
+
+// ── Scrollama ──
+function initScrollama() {
+  const scroller = scrollama();
+  scroller.setup({step:".step", offset:0.5})
+    .onStepEnter(({element}) => {
+      document.querySelectorAll(".step-card").forEach(c=>c.classList.remove("is-active"));
+      element.querySelector(".step-card").classList.add("is-active");
+      const f = +element.dataset.step;
+      currentFrame = f;
+      document.getElementById("hook-overlay").classList.toggle("hidden", f !== 1);
+      colorMap(f);
+    });
+  window.addEventListener("resize", scroller.resize);
+}
+
+// ── Boot ──
+setProgress(5, "Loading map…");
+Promise.all([
+  d3.json("canada_topo.json"),
+  d3.csv("canada_census2016.csv"),
+  d3.csv("canada_census2021.csv"),
+]).then(([topo, rows16, rows21]) => {
+  topoData = topo;
+  setProgress(35, "Aggregating 2016 census…");
+  setTimeout(() => {
+    DATA16 = aggregatePR(rows16);
+    setProgress(65, "Aggregating 2021 census…");
+    setTimeout(() => {
+      DATA21 = aggregatePR(rows21);
+      setProgress(90, "Rendering…");
+      setTimeout(() => {
+        document.getElementById("loading").style.display = "none";
+        initMap();
+        buildRankTables();
+        initCompare();
+        initScrollama();
+        colorMap(1);
+        setProgress(100);
+      }, 80);
+    }, 50);
+  }, 50);
+}).catch(err => {
+  document.getElementById("l-msg").textContent = "Error: " + err.message;
+  console.error(err);
+});
+
+// ══════════════════════════════════════════════════════
+//  COMPARE SIDEBAR
+// ══════════════════════════════════════════════════════
+let cmpSel = []; // max 2 province abbrs
+let cmpOpen = false;
+
+const CMP_METRICS = [
+  { key:"growth",    label:"Population Growth 2016→21",  unit:"%",  color:"#2ecc71",
+    fn: pr => { const d16=DATA16[pr],d21=DATA21[pr]; if(!d16||!d21||d16.pop===0) return 0; return +((d21.pop-d16.pop)/d16.pop*100).toFixed(1); } },
+  { key:"income",    label:"Median After-Tax Income 2021", unit:"k", color:"#e8c57a",
+    fn: pr => DATA21[pr] ? +(DATA21[pr].income_med/1000).toFixed(1) : 0 },
+  { key:"hdgree",    label:"Bachelor's+ Change 2016→21",  unit:"pp", color:"#f472b6",
+    fn: pr => { const d16=DATA16[pr],d21=DATA21[pr]; if(!d16||!d21) return 0; return +(d21.bach_pct-d16.bach_pct).toFixed(1); } },
+  { key:"immig",     label:"Immigrant Share Change 2016→21", unit:"pp", color:"#c084fc",
+    fn: pr => { const d16=DATA16[pr],d21=DATA21[pr]; if(!d16||!d21) return 0; return +(d21.immig_pct-d16.immig_pct).toFixed(1); } },
+  { key:"age",       label:"Median Age Change 2016→21",   unit:"yr", color:"#e05c4a",
+    fn: pr => { const d16=DATA16[pr],d21=DATA21[pr]; if(!d16||!d21) return 0; return +(d21.median_age-d16.median_age).toFixed(2); } },
+];
+
+function initCompare() {
+  document.getElementById("cmp-toggle-btn").addEventListener("click", () => {
+    cmpOpen = !cmpOpen;
+    document.getElementById("cmp-sidebar").classList.toggle("open", cmpOpen);
+    document.getElementById("cmp-toggle-btn").classList.toggle("active", cmpOpen);
+    if (cmpOpen) drawCompare();
+  });
+
+  document.getElementById("cmp-clear").addEventListener("click", () => {
+    cmpSel = [];
+    updatePills();
+    drawCompare();
+    // reset map highlights
+    d3.selectAll(".province").attr("stroke","#1a1612").attr("stroke-width",0.8);
+  });
+}
+
+function handleCmpClick(abbr) {
+  if (!cmpOpen) return;
+  if (!abbr) return;
+  const no_data = ["NT","YT","NU"];
+  if (no_data.includes(abbr)) return;
+  if (cmpSel.includes(abbr)) {
+    cmpSel = cmpSel.filter(a => a !== abbr);
+  } else {
+    if (cmpSel.length >= 2) cmpSel.shift();
+    cmpSel.push(abbr);
+  }
+  updatePills();
+  highlightCmpProvs();
+  drawCompare();
+}
+
+function updatePills() {
+  const pillA = document.getElementById("pill-a");
+  const pillB = document.getElementById("pill-b");
+  if (cmpSel[0]) { pillA.textContent = cmpSel[0]; pillA.className = "cmp-pill a"; }
+  else            { pillA.textContent = "Province A"; pillA.className = "cmp-pill"; }
+  if (cmpSel[1]) { pillB.textContent = cmpSel[1]; pillB.className = "cmp-pill b"; }
+  else            { pillB.textContent = "Province B"; pillB.className = "cmp-pill"; }
+}
+
+function highlightCmpProvs() {
+  d3.selectAll(".province").each(function(d) {
+    const abbr = d.properties["postal-code"];
+    const idx = cmpSel.indexOf(abbr);
+    if (idx === 0)      d3.select(this).attr("stroke","#4da3d4").attr("stroke-width", 2.5);
+    else if (idx === 1) d3.select(this).attr("stroke","#e05c4a").attr("stroke-width", 2.5);
+    else                d3.select(this).attr("stroke","#1a1612").attr("stroke-width", 0.8);
+  });
+}
+
+function drawCompare() {
+  const body = document.getElementById("cmp-sb-body");
+  if (cmpSel.length === 0) {
+    body.innerHTML = '<div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:20px;line-height:1.8;text-align:center">Click any two provinces<br>on the map to compare</div>';
+    return;
+  }
+  if (cmpSel.length === 1) {
+    const pr = ABBR_TO_PR[cmpSel[0]];
+    const info = PR_INFO[pr];
+    body.innerHTML = '<div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:20px;line-height:1.8;text-align:center">Selected: <b style="color:var(--ink)">' + (info?.name||cmpSel[0]) + '</b><br>Click a second province<br>to compare</div>';
+    return;
+  }
+
+  const [abbrA, abbrB] = cmpSel;
+  const prA = ABBR_TO_PR[abbrA], prB = ABBR_TO_PR[abbrB];
+  const nameA = PR_INFO[prA]?.name || abbrA;
+  const nameB = PR_INFO[prB]?.name || abbrB;
+
+  let html = `
+    <div style="display:flex;gap:10px;margin-bottom:12px;font-family:var(--mono);font-size:9px">
+      <div style="display:flex;align-items:center;gap:5px"><div style="width:8px;height:8px;border-radius:1px;background:#4da3d4"></div><span style="color:var(--ink)">${nameA}</span></div>
+      <div style="display:flex;align-items:center;gap:5px"><div style="width:8px;height:8px;border-radius:1px;background:#e05c4a"></div><span style="color:var(--ink)">${nameB}</span></div>
+    </div>`;
+
+  CMP_METRICS.forEach(m => {
+    const vA = m.fn(prA), vB = m.fn(prB);
+    const maxAbs = Math.max(Math.abs(vA), Math.abs(vB), 0.01);
+    const wA = (Math.abs(vA) / maxAbs * 100).toFixed(0);
+    const wB = (Math.abs(vB) / maxAbs * 100).toFixed(0);
+    const fmtA = (vA > 0 ? "+" : "") + vA + " " + m.unit;
+    const fmtB = (vB > 0 ? "+" : "") + vB + " " + m.unit;
+
+    html += `
+      <div class="cmp-metric-block">
+        <div class="cmp-metric-label">${m.label}</div>
+        <div class="cmp-bar-row">
+          <div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;margin-bottom:2px">
+            <span style="color:#a8d4f0">${abbrA}</span><span style="color:#a8d4f0">${fmtA}</span>
+          </div>
+          <div class="cmp-bar-track"><div class="cmp-bar-fill" style="width:${wA}%;background:#4da3d4"></div></div>
+        </div>
+        <div class="cmp-bar-row">
+          <div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;margin-bottom:2px">
+            <span style="color:#f0a8a0">${abbrB}</span><span style="color:#f0a8a0">${fmtB}</span>
+          </div>
+          <div class="cmp-bar-track"><div class="cmp-bar-fill" style="width:${wB}%;background:#e05c4a"></div></div>
+        </div>
+      </div>
+      <hr class="cmp-divider">`;
+  });
+
+  body.innerHTML = html;
+}
+
+</script>
+</body>
+</html>
